@@ -5,6 +5,9 @@ const NUM_CELLS = GRID_SIZE * GRID_SIZE;
 const LIT_COUNT = 4;
 const GAME_DURATION_MS = 30_000;
 
+const HOLD_TO_START_MS = 1000;
+const DRAIN_MS = 180;
+
 type Phase = "idle" | "countdown" | "running" | "ended";
 
 type GameState = {
@@ -38,8 +41,10 @@ function mustGetEl<T extends HTMLElement>(id: string): T {
   return el as T;
 }
 
+const boardWrapEl = mustGetEl<HTMLDivElement>("boardWrap");
 const boardEl = mustGetEl<HTMLDivElement>("board");
 const overlayEl = mustGetEl<HTMLDivElement>("overlay");
+const overlayTextEl = mustGetEl<HTMLDivElement>("overlayText");
 const scoreEl = mustGetEl<HTMLDivElement>("score");
 const highScoreEl = mustGetEl<HTMLDivElement>("highScore");
 const timeEl = mustGetEl<HTMLSpanElement>("time");
@@ -53,11 +58,49 @@ const state: GameState = {
   timerId: null,
   countdownId: null,
   lastTickMs: 0,
-  overlayText: "Click the lit squares\n\nGame ends when you misclick or when the timer hits 0s\n\nClick to start",
+  overlayText: "Click the lit squares\n\nGame ends when you misclick or whe the timer hits 0s\n\nClick & hold to start",
   overlayIsError: false,
 };
 
 const cellButtons: HTMLButtonElement[] = [];
+
+let holdMode: "none" | "holding" | "draining" = "none";
+let holdProgress = 0;
+let holdPointerId: number | null = null;
+let holdStartMs = 0;
+
+let holdRafId: number | null = null;
+let drainRafId: number | null = null;
+let drainStartMs = 0;
+let drainStartProgress = 0;
+
+function clamp01(v: number) {
+  return Math.min(1, Math.max(0, v));
+}
+
+function setHoldProgress(p: number) {
+  holdProgress = clamp01(p);
+  boardWrapEl.style.setProperty("--hold", `${(holdProgress * 100).toFixed(2)}%`);
+  boardWrapEl.classList.toggle("hold-visible", holdProgress > 0.001);
+}
+
+function cancelHoldAnimations() {
+  if (holdRafId !== null) {
+    cancelAnimationFrame(holdRafId);
+    holdRafId = null;
+  }
+  if (drainRafId !== null) {
+    cancelAnimationFrame(drainRafId);
+    drainRafId = null;
+  }
+}
+
+function resetHold() {
+  cancelHoldAnimations();
+  holdMode = "none";
+  holdPointerId = null;
+  setHoldProgress(0);
+}
 
 function buildBoard() {
   boardEl.innerHTML = "";
@@ -87,21 +130,20 @@ function formatSeconds(ms: number): string {
 function render() {
   scoreEl.textContent = String(state.score);
   highScoreEl.textContent = String(state.highScore);
+
   timeEl.textContent = `${formatSeconds(state.timeLeftMs)}s`;
 
   const warn = state.phase === "running" && state.timeLeftMs <= 15_000 && state.timeLeftMs > 5_000;
   const danger = state.phase === "running" && state.timeLeftMs <= 5_000;
-
   timeEl.classList.toggle("time-warn", warn);
   timeEl.classList.toggle("time-danger", danger);
-
 
   for (let i = 0; i < cellButtons.length; i++) {
     cellButtons[i].classList.toggle("lit", state.lit.has(i));
   }
 
   const showOverlay = state.phase !== "running";
-  overlayEl.textContent = state.overlayText;
+  overlayTextEl.textContent = state.overlayText;
   overlayEl.classList.toggle("hidden", !showOverlay);
   overlayEl.classList.toggle("error", state.overlayIsError);
 }
@@ -156,9 +198,12 @@ function endGame(message: string, isError: boolean) {
   state.phase = "ended";
   stopTimer();
   stopCountdown();
+  resetHold();
+
   state.lit.clear();
   maybeUpdateHighScoreNow();
-  setOverlay(`${message}\n\nClick to restart`, isError);
+
+  setOverlay(`${message}\n\nClick & hold to restart`, isError);
   render();
 }
 
@@ -178,19 +223,25 @@ function tickTimer() {
 }
 
 function startRunning() {
+  resetHold();
+
   state.phase = "running";
   state.score = 0;
   state.timeLeftMs = GAME_DURATION_MS;
+
   fillLitSquares();
   setOverlay("", false);
+
   state.lastTickMs = performance.now();
   state.timerId = window.setInterval(tickTimer, 50);
+
   render();
 }
 
 function startCountdown() {
   stopTimer();
   stopCountdown();
+  resetHold();
 
   state.phase = "countdown";
   state.score = 0;
@@ -220,7 +271,7 @@ function handleCellDown(index: number) {
   if (state.phase !== "running") return;
 
   if (!state.lit.has(index)) {
-    endGame(`Game over! Score: ${state.score}`, true);
+    endGame(`Game over! Score: ${state.score}`, false);
     return;
   }
 
@@ -248,6 +299,69 @@ function getCellIndexFromPointer(e: PointerEvent): number | null {
   return row * GRID_SIZE + col;
 }
 
+function startHold(pointerId: number) {
+  cancelHoldAnimations();
+  holdMode = "holding";
+  holdPointerId = pointerId;
+  holdStartMs = performance.now();
+  setHoldProgress(0);
+
+  const loop = () => {
+    if (holdMode !== "holding") return;
+
+    const now = performance.now();
+    const p = (now - holdStartMs) / HOLD_TO_START_MS;
+    setHoldProgress(p);
+
+    if (holdProgress >= 1) {
+      completeHold();
+      return;
+    }
+
+    holdRafId = requestAnimationFrame(loop);
+  };
+
+  holdRafId = requestAnimationFrame(loop);
+}
+
+function startDrain() {
+  cancelHoldAnimations();
+  holdMode = "draining";
+  drainStartMs = performance.now();
+  drainStartProgress = holdProgress;
+
+  const loop = () => {
+    if (holdMode !== "draining") return;
+
+    const now = performance.now();
+    const t = (now - drainStartMs) / DRAIN_MS;
+    const p = drainStartProgress * (1 - t);
+    setHoldProgress(p);
+
+    if (t >= 1 || holdProgress <= 0.001) {
+      holdMode = "none";
+      holdPointerId = null;
+      setHoldProgress(0);
+      return;
+    }
+
+    drainRafId = requestAnimationFrame(loop);
+  };
+
+  drainRafId = requestAnimationFrame(loop);
+}
+
+function completeHold() {
+  const pid = holdPointerId;
+  resetHold();
+  if (pid !== null) {
+    try {
+      overlayEl.releasePointerCapture(pid);
+    } catch {}
+  }
+  startCountdown();
+}
+
 buildBoard();
 render();
 
@@ -262,11 +376,40 @@ boardEl.addEventListener("pointerdown", (e) => {
 });
 
 overlayEl.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
   e.preventDefault();
 
-  if (state.phase === "countdown") return;
+  if (state.phase !== "idle" && state.phase !== "ended") return;
 
-  if (state.phase === "idle" || state.phase === "ended") {
-    startCountdown();
+  resetHold();
+
+  holdPointerId = e.pointerId;
+  try {
+    overlayEl.setPointerCapture(e.pointerId);
+  } catch {}
+
+  startHold(e.pointerId);
+});
+
+overlayEl.addEventListener("pointerup", (e) => {
+  e.preventDefault();
+
+  if (holdMode === "holding" && holdPointerId === e.pointerId) {
+    try {
+      overlayEl.releasePointerCapture(e.pointerId);
+    } catch {}
+    startDrain();
   }
+});
+
+overlayEl.addEventListener("pointercancel", (e) => {
+  e.preventDefault();
+
+  if (holdMode === "holding" && holdPointerId === e.pointerId) {
+    startDrain();
+  }
+});
+
+overlayEl.addEventListener("lostpointercapture", () => {
+  if (holdMode === "holding") startDrain();
 });
