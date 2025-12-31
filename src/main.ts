@@ -43,7 +43,6 @@ const overlayEl = mustGetEl<HTMLDivElement>("overlay");
 const scoreEl = mustGetEl<HTMLDivElement>("score");
 const highScoreEl = mustGetEl<HTMLDivElement>("highScore");
 const timeEl = mustGetEl<HTMLSpanElement>("time");
-const actionBtn = mustGetEl<HTMLButtonElement>("actionBtn");
 
 const state: GameState = {
   phase: "idle",
@@ -54,7 +53,7 @@ const state: GameState = {
   timerId: null,
   countdownId: null,
   lastTickMs: 0,
-  overlayText: "Click the lit squares\n\nGame ends when you misclick or when the timer hits 0s",
+  overlayText: "Click the lit squares\n\nGame ends when you misclick or when the timer hits 0s\n\nClick to start",
   overlayIsError: false,
 };
 
@@ -85,27 +84,17 @@ function formatSeconds(ms: number): string {
   return s.toFixed(1);
 }
 
-function renderActionButton() {
-  if (state.phase === "countdown") {
-    actionBtn.textContent = "Starting…";
-    actionBtn.disabled = true;
-    return;
-  }
-
-  if (state.phase === "running") {
-    actionBtn.textContent = "Restart";
-    actionBtn.disabled = false;
-    return;
-  }
-
-  actionBtn.textContent = "Start";
-  actionBtn.disabled = false;
-}
-
 function render() {
   scoreEl.textContent = String(state.score);
   highScoreEl.textContent = String(state.highScore);
-  timeEl.textContent = formatSeconds(state.timeLeftMs);
+  timeEl.textContent = `${formatSeconds(state.timeLeftMs)}s`;
+
+  const warn = state.phase === "running" && state.timeLeftMs <= 15_000 && state.timeLeftMs > 5_000;
+  const danger = state.phase === "running" && state.timeLeftMs <= 5_000;
+
+  timeEl.classList.toggle("time-warn", warn);
+  timeEl.classList.toggle("time-danger", danger);
+
 
   for (let i = 0; i < cellButtons.length; i++) {
     cellButtons[i].classList.toggle("lit", state.lit.has(i));
@@ -115,8 +104,6 @@ function render() {
   overlayEl.textContent = state.overlayText;
   overlayEl.classList.toggle("hidden", !showOverlay);
   overlayEl.classList.toggle("error", state.overlayIsError);
-
-  renderActionButton();
 }
 
 function randInt(maxExclusive: number): number {
@@ -169,12 +156,9 @@ function endGame(message: string, isError: boolean) {
   state.phase = "ended";
   stopTimer();
   stopCountdown();
-
   state.lit.clear();
-
   maybeUpdateHighScoreNow();
-
-  setOverlay(message, isError);
+  setOverlay(`${message}\n\nClick to restart`, isError);
   render();
 }
 
@@ -186,7 +170,7 @@ function tickTimer() {
   state.timeLeftMs -= delta;
   if (state.timeLeftMs <= 0) {
     state.timeLeftMs = 0;
-    endGame(`Time's up! Final score: ${state.score}`, false);
+    endGame(`Time's up! Score: ${state.score}`, false);
     return;
   }
 
@@ -197,14 +181,10 @@ function startRunning() {
   state.phase = "running";
   state.score = 0;
   state.timeLeftMs = GAME_DURATION_MS;
-
   fillLitSquares();
-
   setOverlay("", false);
-
   state.lastTickMs = performance.now();
   state.timerId = window.setInterval(tickTimer, 50);
-
   render();
 }
 
@@ -215,7 +195,6 @@ function startCountdown() {
   state.phase = "countdown";
   state.score = 0;
   state.timeLeftMs = GAME_DURATION_MS;
-
   state.lit.clear();
 
   let n = 3;
@@ -223,7 +202,7 @@ function startCountdown() {
     if (state.phase !== "countdown") return;
 
     if (n > 0) {
-      setOverlay(`${n}`, false);
+      setOverlay(`Starting in ${n}...`, false);
       n -= 1;
       render();
       state.countdownId = window.setTimeout(step, 1000);
@@ -241,7 +220,7 @@ function handleCellDown(index: number) {
   if (state.phase !== "running") return;
 
   if (!state.lit.has(index)) {
-    endGame(`Game over. Final score: ${state.score}`, true);
+    endGame(`Game over! Score: ${state.score}`, true);
     return;
   }
 
@@ -273,7 +252,7 @@ buildBoard();
 render();
 
 boardEl.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return; 
+  if (e.button !== 0) return;
   e.preventDefault();
 
   const idx = getCellIndexFromPointer(e);
@@ -284,10 +263,10 @@ boardEl.addEventListener("pointerdown", (e) => {
 
 overlayEl.addEventListener("pointerdown", (e) => {
   e.preventDefault();
-});
 
-actionBtn.addEventListener("click", () => {
   if (state.phase === "countdown") return;
 
-  startCountdown();
+  if (state.phase === "idle" || state.phase === "ended") {
+    startCountdown();
+  }
 });
