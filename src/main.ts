@@ -2,7 +2,7 @@ import "./style.css";
 
 const GRID_SIZE = 4;
 const NUM_CELLS = GRID_SIZE * GRID_SIZE;
-const LIT_COUNT = 4;
+const LIT_COUNT = 3;
 const GAME_DURATION_MS = 30_000;
 
 const HOLD_TO_START_MS = 1000;
