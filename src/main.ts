@@ -271,7 +271,7 @@ function handleCellDown(index: number) {
   if (state.phase !== "running") return;
 
   if (!state.lit.has(index)) {
-    endGame(`Game over! Score: ${state.score}`, false);
+    endGame(`Misclick! Score: ${state.score}`, false);
     return;
   }
 

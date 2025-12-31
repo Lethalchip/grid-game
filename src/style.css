@@ -179,6 +179,7 @@ body {
 
   font-size: 28px;
   font-weight: 800;
+  text-shadow: 2px 2px var(--bg);
   color: var(--text);
 
   padding: 14px 16px;
